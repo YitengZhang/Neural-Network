@@ -14,28 +14,48 @@ using namespace std;
 class doublevector {
 	int _size;
 	int max_size;
+	int * count;
 public:
 	double * data;
-	doublevector() : data(0), _size(0), max_size(0) {}
+	doublevector() : data(NULL), _size(0), max_size(0), count(NULL) {}
 	doublevector(int n) :_size(n), max_size(n) {
 		data = new double[n];
 		memset(data, 0, n*sizeof(double));
+		count = new int;
+		*count = 1;
 	}
-	doublevector(const doublevector & other) : _size(other.size()), max_size(other.max_size) {
-		data = new double[max_size];
-		memcpy(data, other.data, _size * sizeof(double));
+	doublevector(const doublevector & other) : _size(other.size()), max_size(other.max_size), count(other.count) {
+		data = other.data;
+		++(*count);
 	}
 	doublevector operator = (const doublevector & other) {
+
+		if (data != NULL && (--(*count)) == 0) {
+			delete[] data;
+			delete count;
+		}
+
 		_size = other.size();
 		max_size = other.max_size;
-		data = new double[max_size];
-		memcpy(data, other.data, _size * sizeof(double));
+		data = other.data;
+		count = other.count;
+		++(*count);
 		return *this;
+	}
+	doublevector copy() {
+		doublevector ans;
+		ans.data = new double[max_size];
+		memcpy(ans.data, data, _size * sizeof(double));
+		ans.count = new int;
+		*ans.count = 1;
+		return ans;
 	}
 	doublevector(int n, double _d) :_size(n), max_size(n) {
 		data = new double[n];
 		for (int i = 0; i < n; ++i)
 			data[i] = _d;
+		count = new int;
+		*count = 1;
 	}
 	double & operator [] (int n) {
 		return data[n];
@@ -56,7 +76,11 @@ public:
 			max_size = 2 * max_size + 2;
 			double * newdata = new double[max_size];
 			memcpy(newdata, data, _size * sizeof(double));
-			delete[] data;
+			if (data != NULL && --(*count) == 0)
+				delete[] data;
+			else
+				count = new int;
+			*count = 1;
 			data = newdata;
 			data[_size++] = _d;
 		}
@@ -69,14 +93,22 @@ public:
 			max_size = 2 * n + 2;
 			double * newdata = new double[max_size];
 			memcpy(newdata, data, _size * sizeof(double));
-			delete[] data;
+			if (--(*count) == 0)
+				delete[] data;
+			else
+				count = new int;
+			*count = 1;
 			data = newdata;
 			_size = n;
 		}
 	}
 	~doublevector() {
-		if (data != NULL)
+		if (data == NULL)
+			return;
+		if ((--(*count)) == 0) {
 			delete[] data;
+			delete count;
+		}
 		return;
 	}
 };
@@ -308,7 +340,7 @@ public:
 		return;
 	}
 
-	virtual node * copy();
+	virtual node * copy() = 0;
 };
 
 int node::currentid = 0;
@@ -719,25 +751,7 @@ public:
 			v[i]->absorb(cn->v[i]);
 		}
 	}
-	virtual complexnode * copy() {
-		vector<node *> temp;
-		for (int i = 0; i < v.size(); ++i) {
-			temp.push_back(v[i]->copy());
-		}
-		for (int i = 0; i < v.size(); ++i) {
-			for (int j = 0; j < v[i]->succ_nodes.size(); ++j) {
-				for (int k = 0; k < v.size(); ++k) {
-					if (v[i]->succ_nodes[j]->succ == v[k]) {
-						NN::link(temp[i], temp[k]);
-						break;
-					}
-				}
-			}
-		}
-		complexnode * ans = new complexnode(temp[0]);
-		ans->name = this->name;
-		return ans;
-	}
+	virtual complexnode * copy();
 };
 
 class activefunction : public node {
@@ -763,10 +777,12 @@ public:
 			dy[i] = dy[i] * fprime(pre_nodes[0]->forward_value[i]);
 		}
 		pre_nodes[0]->backward_value = dy;
+		return true;
 	}
 	virtual activefunction * copy() {
 		activefunction * ans = new activefunction(f, fprime);
 		ans->name = name;
+		return ans;
 	}
 };
 
@@ -774,22 +790,7 @@ class parallelfunction : public complexnode {
 public:
 	int n;
 	node * template_node;
-	parallelfunction(int _n, node * _t_n) : n(_n), template_node(_t_n) {
-		template_node->clear();
-		if (template_node->pre_nodes.size() != 1 || template_node->succ_nodes.size() != 1) {
-			throw(string("not one to one"));
-		}
-		for (int i = 0; i < n; ++i)
-			v.push_back(template_node->copy());
-		unpacknode * up = new unpacknode;
-		packnode * pn = new packnode;
-		for (int i = 0; i < n; ++i) {
-			NN::link(up, v[i]);
-			NN::link(v[i], pn);
-		}
-		build(up);
-		name = template_node->name;
-	}
+	parallelfunction(int _n, node * _t_n);
 };
 
 double FUN_RELU(double x) {
@@ -841,6 +842,7 @@ public:
 			dy[i] = dy[i] * (temp * (1 - temp));
 		}
 		pre_nodes[0]->backward_value = dy;
+		return true;
 	}
 	virtual SIGMOID * copy() {
 		return new SIGMOID;
@@ -1277,6 +1279,26 @@ inline void complexnode::build(node * s) {
 		throw(string("topologysort error"));
 }
 
+inline complexnode * complexnode::copy() {
+	vector<node *> temp;
+	for (int i = 0; i < v.size(); ++i) {
+		temp.push_back(v[i]->copy());
+	}
+	for (int i = 0; i < v.size(); ++i) {
+		for (int j = 0; j < v[i]->succ_nodes.size(); ++j) {
+			for (int k = 0; k < v.size(); ++k) {
+				if (v[i]->succ_nodes[j]->succ == v[k]) {
+					NN::link(temp[i], temp[k]);
+					break;
+				}
+			}
+		}
+	}
+	complexnode * ans = new complexnode(temp[0]);
+	ans->name = this->name;
+	return ans;
+}
+
 inline LinearTransform::LinearTransform(int _n, int _m) :n(_n), m(_m) {
 	stringstream ss;
 	ss << "Linear Transform " << n << string("*") << m;
@@ -1313,4 +1335,21 @@ inline LinearTransform::LinearTransform(int _n, int _m) :n(_n), m(_m) {
 		NN::link(b + j, y + j);
 	}
 	build(in);
+}
+
+inline parallelfunction::parallelfunction(int _n, node * _t_n) : n(_n), template_node(_t_n) {
+	template_node->clear();
+	if (template_node->pre_nodes.size() != 1 || template_node->succ_nodes.size() != 1) {
+		throw(string("not one to one"));
+	}
+	for (int i = 0; i < n; ++i)
+		v.push_back(template_node->copy());
+	unpacknode * up = new unpacknode;
+	packnode * pn = new packnode;
+	for (int i = 0; i < n; ++i) {
+		NN::link(up, v[i]);
+		NN::link(v[i], pn);
+	}
+	build(up);
+	name = template_node->name;
 }
